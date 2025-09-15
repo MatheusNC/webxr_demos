@@ -6,6 +6,7 @@
  */
 import { AXES, XR_BUTTONS } from 'gamepad-wrapper';
 import {
+	CapsuleGeometry,
 	Group,
 	LoadingManager,
 	Mesh,
@@ -14,10 +15,10 @@ import {
 	Raycaster,
 	ShadowMaterial,
 	SphereGeometry,
-	Vector3,
 	TorusGeometry,
-	CapsuleGeometry,
+	Vector3,
 } from 'three';
+import { Root, Text } from '@pmndrs/uikit';
 
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -25,7 +26,6 @@ import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
 import { System } from 'elics';
 import { createFurnitureMarker } from './marker';
 import { globals } from './global';
-import { Root, Text } from '@pmndrs/uikit';
 
 export class FurnitureSystem extends System {
 	init() {
