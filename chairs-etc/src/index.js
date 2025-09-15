@@ -64,22 +64,11 @@ globals.renderer.setAnimationLoop(function () {
 
 globals.renderer.xr.addEventListener('sessionstart', () => {
 	const session = globals.renderer.xr.getSession();
-	console.log(session);
-	session.updateTargetFrameRate(72);
+	if (typeof session?.updateTargetFrameRate === 'function') {
+		try {
+			session.updateTargetFrameRate(72);
+		} catch (e) {
+			console.warn('updateTargetFrameRate not supported:', e);
+		}
+	}
 });
-
-const url =
-	'https://frnaxcssgj.execute-api.us-east-1.amazonaws.com/production/list';
-
-const headers = {
-	Accept: '*/*',
-	'x-api-key': 'mjQsVgIl_jGLntF=_sTMKECUt-1d6zpX',
-};
-
-fetch(url, {
-	method: 'GET',
-	headers: headers,
-})
-	.then((response) => response.json())
-	.then((data) => console.log(data))
-	.catch((error) => console.error('Error:', error));

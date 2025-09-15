@@ -41,7 +41,6 @@ module.exports = {
 		new ESLintPlugin({
 			extensions: ['js'],
 			eslintPath: require.resolve('eslint'),
-			overrideConfigFile: path.resolve(__dirname, '../.eslintrc.cjs'),
 		}),
 		new HtmlWebpackPlugin({
 			template: './src/index.html',

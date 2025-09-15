@@ -15,6 +15,8 @@ import {
 	ShadowMaterial,
 	SphereGeometry,
 	Vector3,
+	TorusGeometry,
+	CapsuleGeometry,
 } from 'three';
 
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
@@ -23,15 +25,16 @@ import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
 import { System } from 'elics';
 import { createFurnitureMarker } from './marker';
 import { globals } from './global';
+import { Root, Text } from '@pmndrs/uikit';
 
 export class FurnitureSystem extends System {
 	init() {
 		this.raycaster = new Raycaster();
 		const manager = new LoadingManager();
-		const DRACO_LOADER = new DRACOLoader(this.manager).setDecoderPath(
+		const DRACO_LOADER = new DRACOLoader(manager).setDecoderPath(
 			`vendor/draco/gltf/`,
 		);
-		const KTX2_LOADER = new KTX2Loader(this.manager).setTranscoderPath(
+		const KTX2_LOADER = new KTX2Loader(manager).setTranscoderPath(
 			`vendor/basis/`,
 		);
 		const gltfLoader = new GLTFLoader(manager)
@@ -39,6 +42,11 @@ export class FurnitureSystem extends System {
 			.setDRACOLoader(DRACO_LOADER)
 			.setKTX2Loader(KTX2_LOADER.detectSupport(globals.renderer));
 		this._gltfLoader = gltfLoader;
+		this._notes = [];
+		this._notePickables = [];
+		this._hoveredNote = null;
+		this._activeNoteInput = null;
+		this._notesLoaded = false;
 		import('@dimforge/rapier3d').then((RAPIER) => {
 			this.RAPIER = RAPIER;
 			// Use the RAPIER module here.
@@ -143,16 +151,22 @@ export class FurnitureSystem extends System {
 					this.rigidBody.setTranslation({ x: 0, y: intersect.y + 3, z: 0 });
 				}
 			};
+
+			// Load persisted notes after scene primitives exist
+			if (!this._notesLoaded) {
+				this._loadNotesFromStorage();
+				this._notesLoaded = true;
+			}
 		}
 
 		if (globals.furnitureToSpawn) {
 			if (!this.cube.userData.furnitureModel && !this._furnitureLoading) {
 				this._furnitureLoading = true;
 				this._gltfLoader.load('assets/' + globals.furnitureToSpawn, (gltf) => {
-					const model = gltf.scene.children[0];
-					model.position.y -= 0.5;
-					this.cube.add(model);
-					this.cube.userData.furnitureModel = model;
+					const modelRoot = gltf.scene;
+					modelRoot.position.y -= 0.5;
+					this.cube.add(modelRoot);
+					this.cube.userData.furnitureModel = modelRoot;
 					this._furnitureLoading = false;
 				});
 			}
@@ -172,11 +186,46 @@ export class FurnitureSystem extends System {
 			}
 		}
 
+		// Compute world-space ray origin and direction from controller
+		const _origin = new Vector3();
+		controller.targetRaySpace.getWorldPosition(_origin);
 		this.raycaster.set(
-			controller.targetRaySpace.position,
+			_origin,
 			controller.targetRaySpace.getWorldDirection(new Vector3()).negate(),
 		);
 		const target = this.raycaster.intersectObject(this.floor, false)[0]?.point;
+
+		// Create a note marker when pressing B (BUTTON_2)
+		if (controller?.gamepadWrapper?.getButtonClick(XR_BUTTONS.BUTTON_2)) {
+			const placement = target
+				? target.clone()
+				: new Vector3().copy(this.cube.position);
+			this.createNoteMarker(placement);
+		}
+
+		// Detect hovered note for interactions
+		let hovered = null;
+		if (this._notePickables.length) {
+			const hit = this.raycaster.intersectObjects(this._notePickables, true)[0];
+			if (hit?.object?.userData?.note) hovered = hit.object.userData.note;
+		}
+		if (this._hoveredNote !== hovered) {
+			// Unhighlight previous
+			if (this._hoveredNote?.torus) this._hoveredNote.torus.scale.set(1, 1, 1);
+			this._hoveredNote = hovered;
+			// Highlight current
+			if (this._hoveredNote?.torus) this._hoveredNote.torus.scale.set(1.15, 1.15, 1.15);
+		}
+
+		// Edit hovered note with A (BUTTON_1)
+		if (this._hoveredNote && controller?.gamepadWrapper?.getButtonClick(XR_BUTTONS.BUTTON_1)) {
+			this._openNoteInput(this._hoveredNote);
+		}
+
+		// Remove hovered note with SQUEEZE
+		if (this._hoveredNote && controller?.gamepadWrapper?.getButtonClick(XR_BUTTONS.SQUEEZE)) {
+			this._removeNote(this._hoveredNote);
+		}
 
 		if (target) {
 			this.targetMarker.visible = true;
@@ -226,6 +275,15 @@ export class FurnitureSystem extends System {
 		if (this.cube.position.y < -5) {
 			this.rigidBody.setTranslation({ x: 0, y: 3, z: 0 });
 		}
+
+		// Update 3D UI roots and billboard for notes
+		if (this._notes && this._notes.length) {
+			for (const note of this._notes) {
+				note.root.update(delta * 1000);
+				// Make exclamation face the camera
+				if (globals.camera && note.billboard) note.billboard.lookAt(globals.camera.position);
+			}
+		}
 	}
 
 	finalizeFurniturePosition() {
@@ -258,5 +316,199 @@ export class FurnitureSystem extends System {
 		this.rigidBody.setTranslation(new this.RAPIER.Vector3(0.0, 3.0, 0.0), true);
 		this.rigidBody.setLinvel(new this.RAPIER.Vector3(0, 0, 0), true);
 		this.rigidBody.setAngvel(new this.RAPIER.Vector3(0, 0, 0), true);
+	}
+
+	createNoteMarker(position, content = '', openInput = true, id = undefined) {
+		const { scene, camera, renderer } = globals;
+		const markerGroup = new Group();
+		markerGroup.position.copy(position);
+
+		// Visual: sphere + torus halo
+		const sphere = new Mesh(
+			new SphereGeometry(0.055, 24, 18),
+			new MeshBasicMaterial({ color: 0xffe066 }),
+		);
+		markerGroup.add(sphere);
+
+		const torus = new Mesh(
+			new TorusGeometry(0.12, 0.012, 16, 48),
+			new MeshBasicMaterial({ color: 0xff9f1c }),
+		);
+		torus.rotation.x = Math.PI / 2;
+		markerGroup.add(torus);
+
+		// Exclamation billboard
+		const billboard = new Group();
+		billboard.position.set(0, 0.14, 0);
+		markerGroup.add(billboard);
+		const bar = new Mesh(
+			new CapsuleGeometry(0.012, 0.16, 4, 8),
+			new MeshBasicMaterial({ color: 0xff3b30 }),
+		);
+		bar.position.y = 0.1;
+		const dot = new Mesh(
+			new SphereGeometry(0.02, 16, 12),
+			new MeshBasicMaterial({ color: 0xff3b30 }),
+		);
+		dot.position.y = -0.02;
+		billboard.add(bar);
+		billboard.add(dot);
+
+		// Label using UIKit
+		const labelAnchor = new Group();
+		labelAnchor.position.set(0, 0.26, 0);
+		markerGroup.add(labelAnchor);
+		const root = new Root(camera, renderer, undefined, {
+			backgroundColor: 'white',
+			backgroundOpacity: 0.92,
+			padding: 0.25,
+			borderRadius: 0.18,
+		});
+		labelAnchor.add(root);
+		const textNode = new Text(content || '', {
+			fontSize: 0.4,
+			fontWeight: 'bold',
+			color: 'black',
+			maxWidth: 3,
+		});
+		root.add(textNode);
+
+		scene.add(markerGroup);
+
+		// Track for picking and persistence
+		const note = {
+			id: id || `${Date.now()}-${Math.round(Math.random() * 1e6)}`,
+			group: markerGroup,
+			root,
+			textNode,
+			content: content || '',
+			sphere,
+			torus,
+			billboard,
+		};
+		for (const pickable of [sphere, torus, bar, dot]) {
+			pickable.userData.note = note;
+			this._notePickables.push(pickable);
+		}
+		this._notes.push(note);
+		this._saveNotesToStorage();
+		if (openInput) this._openNoteInput(note);
+	}
+
+	_openNoteInput(note) {
+		if (this._activeNoteInput) {
+			this._activeNoteInput.remove();
+			this._activeNoteInput = null;
+		}
+		const container = document.createElement('div');
+		container.style.position = 'fixed';
+		container.style.left = '50%';
+		container.style.bottom = '16px';
+		container.style.transform = 'translateX(-50%)';
+		container.style.zIndex = '9999';
+		container.style.background = 'rgba(255,255,255,0.95)';
+		container.style.padding = '8px';
+		container.style.borderRadius = '6px';
+		container.style.boxShadow = '0 2px 12px rgba(0,0,0,0.25)';
+
+		const input = document.createElement('input');
+		input.type = 'text';
+		input.placeholder = 'Digite uma anotação para o marcador...';
+		input.style.minWidth = '260px';
+		input.style.marginRight = '8px';
+		input.value = note.content || '';
+
+		const save = document.createElement('button');
+		save.textContent = 'Salvar';
+		save.className = 'btn btn-sm btn-primary';
+		save.onclick = () => {
+			note.content = input.value.trim();
+			try {
+				if (typeof note.textNode.setText === 'function') {
+					note.textNode.setText(note.content);
+				} else {
+					note.root.remove(note.textNode);
+					note.textNode = new Text(note.content, {
+						fontSize: 0.4,
+						fontWeight: 'bold',
+						color: 'black',
+					});
+					note.root.add(note.textNode);
+				}
+			} catch (e) {
+				console.warn('Falha ao atualizar texto do marcador:', e);
+			}
+			this._saveNotesToStorage();
+			container.remove();
+			this._activeNoteInput = null;
+		};
+
+		const cancel = document.createElement('button');
+		cancel.textContent = 'Cancelar';
+		cancel.className = 'btn btn-sm btn-secondary';
+		cancel.style.marginLeft = '6px';
+		cancel.onclick = () => {
+			container.remove();
+			this._activeNoteInput = null;
+		};
+
+		const removeBtn = document.createElement('button');
+		removeBtn.textContent = 'Excluir';
+		removeBtn.className = 'btn btn-sm btn-danger';
+		removeBtn.style.marginLeft = '6px';
+		removeBtn.onclick = () => {
+			this._removeNote(note);
+			container.remove();
+			this._activeNoteInput = null;
+		};
+
+		container.appendChild(input);
+		container.appendChild(save);
+		container.appendChild(cancel);
+		container.appendChild(removeBtn);
+		document.body.appendChild(container);
+		this._activeNoteInput = container;
+		input.focus();
+	}
+
+	_removeNote(note) {
+		if (!note) return;
+		globals.scene.remove(note.group);
+		this._notePickables = this._notePickables.filter((o) => o.userData.note !== note);
+		this._notes = this._notes.filter((n) => n !== note);
+		this._hoveredNote = null;
+		this._saveNotesToStorage();
+	}
+
+	_saveNotesToStorage() {
+		try {
+			const data = this._notes.map((n) => ({
+				id: n.id,
+				content: n.content,
+				position: [n.group.position.x, n.group.position.y, n.group.position.z],
+			}));
+			localStorage.setItem('chairs-etc:notes', JSON.stringify(data));
+		} catch (e) {
+			console.warn('Falha ao salvar notas:', e);
+		}
+	}
+
+	_loadNotesFromStorage() {
+		try {
+			const raw = localStorage.getItem('chairs-etc:notes');
+			if (!raw) return;
+			const arr = JSON.parse(raw);
+			if (!Array.isArray(arr)) return;
+			for (const item of arr) {
+				const pos = new Vector3(
+					Number(item?.position?.[0]) || 0,
+					Number(item?.position?.[1]) || 0,
+					Number(item?.position?.[2]) || 0,
+				);
+				this.createNoteMarker(pos, String(item?.content || ''), false, item?.id);
+			}
+		} catch (e) {
+			console.warn('Falha ao carregar notas:', e);
+		}
 	}
 }

@@ -53,84 +53,12 @@ export function createFurnitureMarker() {
 		14, // Left face
 	];
 
-	// Colors array with a gradient effect (white at bottom, transparent at top)
-	const colors = [
-		// Front face
-		1,
-		1,
-		1,
-		1, // Bottom left - opaque white
-		1,
-		1,
-		1,
-		1, // Bottom right - opaque white
-		1,
-		1,
-		1,
-		0, // Top left - transparent
-		1,
-		1,
-		1,
-		0, // Top right - transparent
-
-		// Right face
-		1,
-		1,
-		1,
-		1, // Bottom left - opaque white
-		1,
-		1,
-		1,
-		1, // Bottom right - opaque white
-		1,
-		1,
-		1,
-		0, // Top left - transparent
-		1,
-		1,
-		1,
-		0, // Top right - transparent
-
-		// Back face
-		1,
-		1,
-		1,
-		1, // Bottom left - opaque white
-		1,
-		1,
-		1,
-		1, // Bottom right - opaque white
-		1,
-		1,
-		1,
-		0, // Top left - transparent
-		1,
-		1,
-		1,
-		0, // Top right - transparent
-
-		// Left face
-		1,
-		1,
-		1,
-		1, // Bottom left - opaque white
-		1,
-		1,
-		1,
-		1, // Bottom right - opaque white
-		1,
-		1,
-		1,
-		0, // Top left - transparent
-		1,
-		1,
-		1,
-		0, // Top right - transparent
-	];
+	// RGB vertex colors (all white). 16 vertices * 3 components = 48
+	const colors = new Array(16 * 3).fill(1);
 
 	geometry.setIndex(indices);
 	geometry.setAttribute('position', new Float32BufferAttribute(vertices, 3));
-	geometry.setAttribute('color', new Float32BufferAttribute(colors, 4)); // 4 components for RGBA
+	geometry.setAttribute('color', new Float32BufferAttribute(colors, 3));
 
 	const material = new MeshBasicMaterial({
 		vertexColors: true,
