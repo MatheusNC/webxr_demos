@@ -7,6 +7,7 @@
 import { AXES, XR_BUTTONS } from 'gamepad-wrapper';
 import {
 	CapsuleGeometry,
+	DoubleSide,
 	Group,
 	LoadingManager,
 	Mesh,
@@ -514,35 +515,32 @@ export class FurnitureSystem extends System {
 			maxWidth: 3,
 		}));
 		// Buttons row
+		// Buttons row using meshes for reliable ray hits
 		const row = new Group();
+		row.position.y = -0.2;
 		root.add(row);
-		const confirm = new Root(camera, renderer, undefined, {
-			backgroundColor: '#dc3545',
-			backgroundOpacity: 1,
-			padding: 0.2,
-			borderRadius: 0.12,
-		});
-		confirm.add(new Text('Excluir', { fontSize: 0.35, color: 'white' }));
-		const cancel = new Root(camera, renderer, undefined, {
-			backgroundColor: '#6c757d',
-			backgroundOpacity: 1,
-			padding: 0.2,
-			borderRadius: 0.12,
-		});
-		cancel.add(new Text('Cancelar', { fontSize: 0.35, color: 'white' }));
-		// Simple layout using Three groups
-		const left = new Group();
-		const right = new Group();
-		left.add(confirm);
-		right.add(cancel);
-		left.position.x = -0.6;
-		right.position.x = 0.6;
-		row.add(left);
-		row.add(right);
+		const makeButton = (label, color) => {
+			const btn = new Group();
+			const bg = new Mesh(
+				new PlaneGeometry(0.9, 0.36),
+				new MeshBasicMaterial({ color, side: DoubleSide, transparent: true, opacity: 0.95 }),
+			);
+			const txtRoot = new Root(camera, renderer, undefined, {});
+			txtRoot.add(new Text(label, { fontSize: 0.35, color: 'white' }));
+			btn.add(bg);
+			btn.add(txtRoot);
+			btn.userData.bg = bg;
+			return btn;
+		};
+		const confirm = makeButton('Excluir', '#dc3545');
+		const cancel = makeButton('Cancelar', '#6c757d');
+		confirm.position.x = -0.55;
+		cancel.position.x = 0.55;
+		row.add(confirm);
+		row.add(cancel);
 
 		// Interaction using ray hits (reuse hovered logic): we consider it confirmed when BUTTON_1 is clicked while hovering over confirm/cancel areas
-		const pickables = [confirm, cancel];
-		for (const p of pickables) p.userData.type = 'confirm-ui';
+		const pickables = [confirm.userData.bg, cancel.userData.bg];
 		const onFrame = () => {
 			// billboard
 			if (globals.camera) anchor.lookAt(globals.camera.position);
@@ -552,10 +550,11 @@ export class FurnitureSystem extends System {
 			const origin = new Vector3();
 			globals.controllers.right.targetRaySpace.getWorldPosition(origin);
 			r.set(origin, globals.controllers.right.targetRaySpace.getWorldDirection(new Vector3()).negate());
-			const uiHits = r.intersectObjects(pickables, true);
-			const overConfirm = uiHits.some((h) => h.object === confirm || confirm.children?.includes?.(h.object));
-			const overCancel = uiHits.some((h) => h.object === cancel || cancel.children?.includes?.(h.object));
-			if (globals.controllers.right.gamepadWrapper?.getButtonClick(XR_BUTTONS.BUTTON_1)) {
+			const uiHits = r.intersectObjects(pickables, false);
+			const overConfirm = uiHits.some((h) => h.object === confirm.userData.bg);
+			const overCancel = uiHits.some((h) => h.object === cancel.userData.bg);
+			if (globals.controllers.right.gamepadWrapper?.getButtonClick(XR_BUTTONS.BUTTON_1) ||
+				globals.controllers.right.gamepadWrapper?.getButtonClick(XR_BUTTONS.TRIGGER)) {
 				if (overConfirm) {
 					this._removeNote(note);
 					cleanup();
