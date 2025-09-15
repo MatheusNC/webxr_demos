@@ -46,6 +46,7 @@ export class FurnitureSystem extends System {
 		this._notePickables = [];
 		this._hoveredNote = null;
 		this._activeNoteInput = null;
+		this._activeConfirm3D = null;
 		this._notesLoaded = false;
 		import('@dimforge/rapier3d').then((RAPIER) => {
 			this.RAPIER = RAPIER;
@@ -195,12 +196,16 @@ export class FurnitureSystem extends System {
 		);
 		const target = this.raycaster.intersectObject(this.floor, false)[0]?.point;
 
-		// Create a note marker when pressing B (BUTTON_2)
+		// B (BUTTON_2): if hovering a note, open delete confirm; else create new note
 		if (controller?.gamepadWrapper?.getButtonClick(XR_BUTTONS.BUTTON_2)) {
-			const placement = target
-				? target.clone()
-				: new Vector3().copy(this.cube.position);
-			this.createNoteMarker(placement);
+			if (this._hoveredNote) {
+				this._openDeleteConfirm(this._hoveredNote);
+			} else {
+				const placement = target
+					? target.clone()
+					: new Vector3().copy(this.cube.position);
+				this.createNoteMarker(placement);
+			}
 		}
 
 		// Detect hovered note for interactions
@@ -210,11 +215,15 @@ export class FurnitureSystem extends System {
 			if (hit?.object?.userData?.note) hovered = hit.object.userData.note;
 		}
 		if (this._hoveredNote !== hovered) {
-			// Unhighlight previous
+			// Unhighlight previous and hide all labels
 			if (this._hoveredNote?.torus) this._hoveredNote.torus.scale.set(1, 1, 1);
+			for (const n of this._notes) {
+				if (n?.root) n.root.visible = false;
+			}
 			this._hoveredNote = hovered;
-			// Highlight current
+			// Highlight current and show its label
 			if (this._hoveredNote?.torus) this._hoveredNote.torus.scale.set(1.15, 1.15, 1.15);
+			if (this._hoveredNote?.root) this._hoveredNote.root.visible = true;
 		}
 
 		// Edit hovered note with A (BUTTON_1)
@@ -284,6 +293,9 @@ export class FurnitureSystem extends System {
 				if (globals.camera && note.billboard) note.billboard.lookAt(globals.camera.position);
 			}
 		}
+
+		// Drive confirm 3D loop if active
+		if (this._confirmLoop) this._confirmLoop();
 	}
 
 	finalizeFurniturePosition() {
@@ -372,6 +384,7 @@ export class FurnitureSystem extends System {
 			maxWidth: 3,
 		});
 		root.add(textNode);
+		root.visible = false;
 
 		scene.add(markerGroup);
 
@@ -469,6 +482,93 @@ export class FurnitureSystem extends System {
 		document.body.appendChild(container);
 		this._activeNoteInput = container;
 		input.focus();
+	}
+
+	_openDeleteConfirm(note) {
+		const { camera, renderer } = globals;
+		if (this._activeConfirm3D) {
+			this._activeConfirm3D.parent?.remove(this._activeConfirm3D);
+			this._activeConfirm3D = null;
+		}
+		const anchor = new Group();
+		anchor.position.copy(note.group.position);
+		anchor.position.y += 0.35;
+		globals.scene.add(anchor);
+		const root = new Root(camera, renderer, undefined, {
+			backgroundColor: 'white',
+			backgroundOpacity: 0.95,
+			padding: 0.25,
+			borderRadius: 0.18,
+			flexDirection: 'column',
+			alignItems: 'center',
+			gap: 0.2,
+		});
+		anchor.add(root);
+		root.add(new Text('Excluir este marcador?', {
+			fontSize: 0.45,
+			fontWeight: 'bold',
+			color: 'black',
+			textAlign: 'center',
+			maxWidth: 3,
+		}));
+		// Buttons row
+		const row = new Group();
+		root.add(row);
+		const confirm = new Root(camera, renderer, undefined, {
+			backgroundColor: '#dc3545',
+			backgroundOpacity: 1,
+			padding: 0.2,
+			borderRadius: 0.12,
+		});
+		confirm.add(new Text('Excluir', { fontSize: 0.35, color: 'white' }));
+		const cancel = new Root(camera, renderer, undefined, {
+			backgroundColor: '#6c757d',
+			backgroundOpacity: 1,
+			padding: 0.2,
+			borderRadius: 0.12,
+		});
+		cancel.add(new Text('Cancelar', { fontSize: 0.35, color: 'white' }));
+		// Simple layout using Three groups
+		const left = new Group();
+		const right = new Group();
+		left.add(confirm);
+		right.add(cancel);
+		left.position.x = -0.6;
+		right.position.x = 0.6;
+		row.add(left);
+		row.add(right);
+
+		// Interaction using ray hits (reuse hovered logic): we consider it confirmed when BUTTON_1 is clicked while hovering over confirm/cancel areas
+		const pickables = [confirm, cancel];
+		for (const p of pickables) p.userData.type = 'confirm-ui';
+		const onFrame = () => {
+			// billboard
+			if (globals.camera) anchor.lookAt(globals.camera.position);
+			root.update(16);
+			if (!globals.controllers?.right?.targetRaySpace) return;
+			const r = this.raycaster;
+			const origin = new Vector3();
+			globals.controllers.right.targetRaySpace.getWorldPosition(origin);
+			r.set(origin, globals.controllers.right.targetRaySpace.getWorldDirection(new Vector3()).negate());
+			const uiHits = r.intersectObjects(pickables, true);
+			const overConfirm = uiHits.some((h) => h.object === confirm || confirm.children?.includes?.(h.object));
+			const overCancel = uiHits.some((h) => h.object === cancel || cancel.children?.includes?.(h.object));
+			if (globals.controllers.right.gamepadWrapper?.getButtonClick(XR_BUTTONS.BUTTON_1)) {
+				if (overConfirm) {
+					this._removeNote(note);
+					cleanup();
+				} else if (overCancel) {
+					cleanup();
+				}
+			}
+		};
+		const cleanup = () => {
+			globals.scene.remove(anchor);
+			this._activeConfirm3D = null;
+			this._confirmLoop = null;
+		};
+		this._confirmLoop = onFrame;
+		this._activeConfirm3D = anchor;
 	}
 
 	_removeNote(note) {
