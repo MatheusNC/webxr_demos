@@ -196,17 +196,7 @@ export class FurnitureSystem extends System {
 		);
 		const target = this.raycaster.intersectObject(this.floor, false)[0]?.point;
 
-		// B (BUTTON_2): if hovering a note, open delete confirm; else create new note
-		if (controller?.gamepadWrapper?.getButtonClick(XR_BUTTONS.BUTTON_2)) {
-			if (this._hoveredNote) {
-				this._openDeleteConfirm(this._hoveredNote);
-			} else {
-				const placement = target
-					? target.clone()
-					: new Vector3().copy(this.cube.position);
-				this.createNoteMarker(placement);
-			}
-		}
+		// (handled after hover detection)
 
 		// Detect hovered note for interactions
 		let hovered = null;
@@ -224,6 +214,18 @@ export class FurnitureSystem extends System {
 			// Highlight current and show its label
 			if (this._hoveredNote?.torus) this._hoveredNote.torus.scale.set(1.15, 1.15, 1.15);
 			if (this._hoveredNote?.root) this._hoveredNote.root.visible = true;
+		}
+
+		// B (BUTTON_2): if hovering a note, open delete confirm; else create new note
+		if (controller?.gamepadWrapper?.getButtonClick(XR_BUTTONS.BUTTON_2)) {
+			if (this._hoveredNote) {
+				this._openDeleteConfirm(this._hoveredNote);
+			} else if (!this._activeConfirm3D) {
+				const placement = target
+					? target.clone()
+					: new Vector3().copy(this.cube.position);
+				this.createNoteMarker(placement);
+			}
 		}
 
 		// Edit hovered note with A (BUTTON_1)
